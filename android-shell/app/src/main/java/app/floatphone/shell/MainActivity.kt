@@ -284,6 +284,11 @@ class MainActivity : AppCompatActivity() {
             databaseEnabled = true
             mediaPlaybackRequiresUserGesture = false
             allowFileAccess = false
+            // 让 WebView 尊重网页的 viewport meta（width=device-width / viewportFit=cover）。
+            // 不设时 WebView 默认用约 980px 布局视口，命中桌面版布局：界面整体缩小、
+            // 四周留黑边（页面在屏幕中间显示成一个"缩小版手机模拟器"）。
+            useWideViewPort = true
+            loadWithOverviewMode = true
             userAgentString = "$userAgentString FloatShell/$VERSION"
         }
         CookieManager.getInstance().setAcceptCookie(true)
