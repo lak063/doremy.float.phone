@@ -1032,7 +1032,9 @@
    距 20→5.13vw、图标 58→14.87vw、dock 354→90.77vw），窄屏呈现与正常
    手机完全相同的比例观感，无多余留白；网格/dock 同源，天然对齐。
    ≥374px 不受影响。 */
-@media (max-width: 373px) and (hover: none) and (pointer: coarse) {
+/* 窄视口按纯宽度判断：不再依赖 (hover:none)/(pointer:coarse)，安卓壳 WebView
+   里这两个媒体特性可能误报为 hover/fine，导致移动端样式整套失效（缩屏黑边）。 */
+@media (max-width: 373px) {
   .icon-grid,
   .dock {
     --slot-size: 16.92vw;
@@ -1056,7 +1058,9 @@
 
 /* ── Mobile responsive ── */
 
-@media (max-width: 500px) and (hover: none) and (pointer: coarse) {
+/* 同上：安卓壳 WebView 里 (hover:none)/(pointer:coarse) 不可靠，改用纯宽度判断。
+   视口宽度由壳侧 useWideViewPort 保证等于设备宽度，窄屏即移动端铺满布局。 */
+@media (max-width: 500px) {
 
   /* 用户在设置里显式开启「显示系统状态栏」且运行时不在全屏时，控制器才会挂
      data-pwa-display-mode 标记（见 pwa-manifest-injector）：此时所有 App 共用系统
