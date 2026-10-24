@@ -1,4 +1,4 @@
-import { loadChatSessions } from "./chat-storage";
+import { getActiveChatSessionId, loadChatSessions, saveChatSessions } from "./chat-storage";
 import { formatChatTimestamp } from "./llm-prompt-assembler";
 import { kvGet, kvRemove, kvSet, registerDynamicPrefix } from "./kv-db";
 
@@ -116,7 +116,27 @@ export function appendChatOfflineTurn(input: {
         createdAt: new Date().toISOString(),
     };
     saveChatOfflineTurns(input.sessionId, [...loadChatOfflineTurns(input.sessionId), turn]);
+    bumpOfflineTurnUnread(input.sessionId);
     return turn;
+}
+
+/**
+ * 线下消息也计入会话未读：角色在线下模式产生的回复，若用户当前不在该聊天室
+ * （或页面不可见），就给会话未读数 +1，让列表亮起红点。已读仍由 markChatSessionRead
+ * 统一清零，与普通消息共用同一计数。
+ */
+function bumpOfflineTurnUnread(sessionId: string): void {
+    if (typeof window === "undefined") return;
+    const activeSessionId = getActiveChatSessionId();
+    const visible = typeof document === "undefined" || document.visibilityState === "visible";
+    // 用户正开着该聊天室且页面可见时，不累计未读（正在看，不需要红点提示）
+    if (activeSessionId === sessionId && visible) return;
+    const sessions = loadChatSessions();
+    const session = sessions.find(item => item.id === sessionId);
+    if (!session) return;
+    session.unreadCount = Math.max(0, session.unreadCount || 0) + 1;
+    saveChatSessions(sessions);
+    window.dispatchEvent(new CustomEvent("chat-messages-updated", { detail: { sessionId } }));
 }
 
 export function updateChatOfflineTurn(
