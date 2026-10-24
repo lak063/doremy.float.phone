@@ -74,6 +74,17 @@ export async function consumeServerOutbox(options?: { silent?: boolean; force?: 
         // 壳读站点回传箱（与它的任务同源）；其余情况读个人云回传箱。
         const sources: Array<"personal" | "shared"> = shellMode ? ["shared"] : ["personal"];
         const handledTriggerKeys = new Set<string>();
+        // 本轮开始前各会话已有的消息 id 快照。
+        //
+        // 为什么需要：合并现在沿用服务端生成时间（createdAt = entry.created_at），
+        // 落库后这些消息的 createdAt 必然早于 passStartMs。下面按 armAt 判定
+        // 「本地是否已经生成过这一轮」时，会把同一批里刚合并进来的条目误认成
+        // 本地产物，于是后续条目被跳过、消息丢失。记住基线就能把它们排除掉。
+        const passBaselineIds = new Map<string, Set<string>>();
+        // 本轮真正合并进消息的会话，收尾时按时间重排一次 order。
+        // 合并进来的消息带的是服务端生成时间（过去时刻），可能插在本轮之前
+        // 已有的本地消息之间——不重排的话 order 仍是追加顺序，显示会错乱。
+        const mergedSessionIds = new Set<string>();
         for (const source of sources) {
           for (let batch = 0; batch < MAX_OUTBOX_BATCHES_PER_PASS; batch += 1) {
             const response = await (source === "personal"
@@ -201,8 +212,16 @@ export async function consumeServerOutbox(options?: { silent?: boolean; force?: 
                     }
 
                     const armAtMs = typeof meta.armAt === "string" ? Date.parse(meta.armAt) : NaN;
+                    // 基线快照：本轮开始前该会话已有的消息 id。合并进来的消息
+                    // 现在带服务端生成时间（早于 passStartMs），不排除基线外
+                    // 的新消息就会被下面的时间窗判定误认成「本地已生成」。
+                    if (!passBaselineIds.has(sessionId)) {
+                        passBaselineIds.set(sessionId, new Set(existingMessages.map(m => m.id)));
+                    }
+                    const baselineIds = passBaselineIds.get(sessionId)!;
                     if (Number.isFinite(armAtMs) && existingMessages.some(m => {
                         if (m.role !== "assistant") return false;
+                        if (!baselineIds.has(m.id)) return false; // 本轮刚合并进来的，不算本地产物
                         const createdMs = Date.parse(m.createdAt);
                         return createdMs > armAtMs && createdMs < passStartMs;
                     })) {
@@ -240,8 +259,18 @@ export async function consumeServerOutbox(options?: { silent?: boolean; force?: 
                         meta.prevCount ?? 0,
                         followUpIndex,
                         existingMessages,
-                        { silent: options?.silent !== false, ...(shortcutMarker ? { shortcutMarker } : {}) },
+                        {
+                            silent: options?.silent !== false,
+                            // 沿用服务端生成时间，而不是「合并那一刻」。
+                            // 不传时 parseAndSaveResponse 落到当前时间，离线期间
+                            // 积压的多条消息会全部挤在用户刚上线的同一时刻，
+                            // 既看不出真实时间，顺序也被打乱。
+                            // bridge / 屏幕速聊分支早就传了 createdAt，这里此前漏了。
+                            ...(entry.created_at ? { createdAt: entry.created_at } : {}),
+                            ...(shortcutMarker ? { shortcutMarker } : {}),
+                        },
                     );
+                    if (hasVisible) mergedSessionIds.add(sessionId);
                     if (hasVisible && newCount < 10) scheduleFollowUp(sessionId, newCount, stateValues);
                     clearTimedWakeIfHandled(entry.trigger_key);
                     consumedIds.push(entry.id);
@@ -266,6 +295,11 @@ export async function consumeServerOutbox(options?: { silent?: boolean; force?: 
             if (!ackResponse || !ackResponse.ok) break;
             if (entries.length < OUTBOX_BATCH_SIZE) break;
           }
+        }
+        // 收尾：把本轮合并过消息的会话按时间重排一次显示顺序。
+        // bridge / 屏幕速聊分支各自在分支内调过，这里统一兜住普通离线消息。
+        if (mergedSessionIds.size > 0) {
+            for (const sid of mergedSessionIds) reindexSessionMessageOrdersByTime(sid);
         }
     } finally {
         consuming = false;
